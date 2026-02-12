@@ -83,7 +83,7 @@ class KunlunScaledMMLinearKernel(CutlassScaledMMLinearKernel):
                 x=x_q,
                 w=w_q.transpose(0, 1),
                 out_dtype=x.dtype,
-                x_pc_max=x_s * 127.0 if static else x_s,
+                x_pc_max=x_s,
                 w_pc_max=w_s,
                 bias=bias.to(torch.float32).contiguous() if bias is not None else None,
             )

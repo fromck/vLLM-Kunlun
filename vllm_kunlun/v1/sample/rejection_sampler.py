@@ -4,6 +4,7 @@ from typing import Optional
 from typing import Union
 import torch
 import torch.nn as nn
+import xtorch_ops
 
 from vllm.logger import init_logger
 
@@ -176,28 +177,23 @@ def rejection_sample(
         is_greedy = None
     else:
         is_greedy = sampling_metadata.temperature == GREEDY_TEMPERATURE
+
+    # Ensure bonus_token_ids is 1-dimensional
+    bonus_token_ids_1d = bonus_token_ids.squeeze(1) if bonus_token_ids.ndim == 2 else bonus_token_ids
+    # Compute target argmax for both greedy and random sampling
+    target_argmax = target_probs.argmax(dim=-1)
+
     if not sampling_metadata.all_random:
         # Rejection sampling for greedy sampling requests.
-        target_argmax = target_probs.argmax(dim=-1)
-        if min(num_draft_tokens) == 1 and max(
-                num_draft_tokens) == 1 and sampling_metadata.all_greedy:
-            rejection_greedy_sample_spec_len_1_pytorch(
-                output_token_ids,
-                draft_token_ids,
-                target_argmax,
-                bonus_token_ids,
-            )
-        else:
-            rejection_greedy_sample_pytorch(
-                output_token_ids,
-                cu_num_draft_tokens,
-                draft_token_ids,
-                target_argmax,
-                bonus_token_ids,
-                num_draft_tokens,
-                max_spec_len,
-                is_greedy,
-            )
+        xtorch_ops.rejection_greedy_sample(
+            output_token_ids,
+            cu_num_draft_tokens,
+            draft_token_ids,
+            target_argmax,
+            bonus_token_ids_1d,
+            is_greedy,
+            max_spec_len,
+        )
         if sampling_metadata.all_greedy:
             return output_token_ids
 
@@ -223,21 +219,24 @@ def rejection_sample(
         device,
     )
 
-    rejection_random_sample_pytorch(
+    # Rejection sampling for random sampling requests (V1)
+    xtorch_ops.rejection_random_sample(
         output_token_ids,
         cu_num_draft_tokens,
         draft_token_ids,
-        draft_probs,
+        draft_probs if draft_probs is not None else torch.empty(0, device=device),
         target_probs,
-        bonus_token_ids,
+        bonus_token_ids_1d,
         recovered_token_ids,
         uniform_probs,
         is_greedy,
         max_spec_len,
         vocab_size,
-        IS_NGRAM=draft_probs is None,
-        # num_warps=1,
+        no_draft_probs=draft_probs is None,
+        threshold_single=1.0,
+        draft_prob_val=1.0,
     )
+
     return output_token_ids
 
 
@@ -331,14 +330,7 @@ def expand_batch_to_tokens(
     batch_size = x.shape[0]
     assert cu_num_tokens.shape[0] == batch_size
     expanded_x = x.new_empty(num_tokens)
-    expand_pytorch(
-        expanded_x,
-        x,
-        cu_num_tokens,
-        replace_from,
-        replace_to,
-        MAX_NUM_TOKENS=MAX_SPEC_LEN,  # To avoid recompilation.
-    )
+    xtorch_ops.expand_tokens(expanded_x, x, cu_num_tokens, replace_from, replace_to)
     return expanded_x
 
 
@@ -422,15 +414,16 @@ def sample_recovered_tokens(
             q[i].exponential_(generator=generator)
 
     recovered_token_ids = torch.empty_like(draft_token_ids)
-    sample_recovered_tokens_pytorch(
-        recovered_token_ids,
+
+    xtorch_ops.sample_recovered_tokens(
+        recovered_token_ids,  # output_token_ids
         cu_num_draft_tokens,
         draft_token_ids,
         draft_probs,
         target_probs,
         q,
         vocab_size,
-        IS_NGRAM=draft_probs is None,
+        draft_probs is None,  # no_draft_probs
     )
     return recovered_token_ids
 

@@ -163,7 +163,7 @@ def propose(
         torch.from_numpy(self.token_arange_np[: batch_size + 1]).clone().to(torch.int32)
     )
 
-    attn_metadata_builder = self.runner.attn_groups[0][0].metadata_builder
+    attn_metadata_builder = self.runner.attn_groups[0][0].metadata_builders[ubatch_id]
     for token_index in range(self.num_speculative_tokens - 1):
         # Update the inputs.
         # cast to int32 is crucial when eagle model is compiled.
@@ -171,7 +171,7 @@ def propose(
         input_ids = draft_token_ids_list[-1].int()
         positions += 1
 
-        # NOTE(woosuk): We should handle the case where the draft model
+        # NOTE(woosul): We should handle the case where the draft model
         # generates tokens beyond the max model length. Since it is complex
         # to remove such requests from the batch, we keep them in the batch
         # but adjust the position ids and slot mappings to avoid the
